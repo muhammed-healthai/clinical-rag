@@ -36,7 +36,12 @@ CUSTOM_CSS = """
 [data-testid="stToolbar"], [data-testid="stDeployButton"]{ display:none; }
 #MainMenu{ visibility:hidden; }
 [data-testid="stMainBlockContainer"], .block-container{
-  max-width:1320px; margin:0 auto; padding-top:2.2rem; padding-bottom:3rem;
+  max-width:100%;
+  width:100%;
+  padding-left:2rem;
+  padding-right:2rem;
+  padding-top:2.2rem;
+  padding-bottom:3rem;
 }
 
 /* Header */
@@ -184,7 +189,7 @@ st.markdown(
 )
 
 # Three fixed page columns
-kb_col, main_col, side_col = st.columns([1, 2, 1.1], gap="large")
+kb_col, main_col, side_col = st.columns([1, 4, 1.3], gap="large")
 
 # Left: knowledge base panel
 with kb_col:
