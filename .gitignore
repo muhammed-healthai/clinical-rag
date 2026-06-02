@@ -1,0 +1,17 @@
+# Secrets - never commit your real key
+.env
+
+# Generated database
+chroma_db/
+
+# Guideline PDFs (keep the folder, not the copyrighted contents)
+guidelines/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
