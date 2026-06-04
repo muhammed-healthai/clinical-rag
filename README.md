@@ -17,7 +17,7 @@ the interface, without touching the command line.
 
 ## Screenshots
 
-> Add screenshots to a `docs/` folder and they'll render here.
+![Landing screen](docs/landing.png)
 
 | Answer with citations | Refusal when out of scope | Admin knowledge base |
 | --- | --- | --- |
