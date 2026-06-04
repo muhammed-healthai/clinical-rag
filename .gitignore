@@ -1,10 +1,11 @@
-# Secrets - never commit your real key
+# Secrets - never commit your real keys
 .env
 
-# Generated database
+# Generated index and local state
 chroma_db/
+guidelines_meta.json
 
-# Guideline PDFs (keep the folder, not the copyrighted contents)
+# Guideline PDFs (copyrighted - keep the folder, not the contents)
 guidelines/*.pdf
 
 # Python

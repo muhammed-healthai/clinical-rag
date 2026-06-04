@@ -4,15 +4,19 @@ app.py - Front end for the clinical guideline assistant.
 Run with:
     streamlit run app.py
 
-A wide, three-column layout: knowledge base (left), the question and answer
-(centre), and a context panel (right) that shows how it works before a question
-and the source citations after. All three are fixed page columns - nothing is
-collapsible. Independent educational prototype; does not use the NHS logo or
-imply any official affiliation.
+Three-column layout: knowledge base (left), question and answer (centre),
+context panel (right). Designated admins can unlock a management panel to add
+or remove guidelines from the live index. Independent educational prototype;
+does not use the NHS logo or imply any official affiliation.
 """
 
+import os
+import html
+from datetime import datetime
 import streamlit as st
-from rag import answer, list_sources
+from rag import answer, list_sources, add_guideline, delete_guideline, get_source_meta
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 st.set_page_config(
     page_title="Clinical Guideline Assistant",
@@ -31,17 +35,18 @@ CUSTOM_CSS = """
 [data-testid="stAppViewContainer"] *{
   font-family:'IBM Plex Sans',-apple-system,Arial,sans-serif;
 }
+/* Keep Streamlit's icon glyphs on their own icon font (not IBM Plex) */
+[data-testid="stIconMaterial"], .material-icons, .material-icons-outlined,
+span[data-testid="stExpanderIcon"]{
+  font-family:'Material Symbols Rounded','Material Symbols Outlined','Material Icons' !important;
+}
 [data-testid="stAppViewContainer"]{ background:var(--bg); }
 [data-testid="stHeader"]{ background:transparent; }
 [data-testid="stToolbar"], [data-testid="stDeployButton"]{ display:none; }
 #MainMenu{ visibility:hidden; }
 [data-testid="stMainBlockContainer"], .block-container{
-  max-width:100%;
-  width:100%;
-  padding-left:2rem;
-  padding-right:2rem;
-  padding-top:2.2rem;
-  padding-bottom:3rem;
+  max-width:100%; width:100%;
+  padding-left:2rem; padding-right:2rem; padding-top:2.2rem; padding-bottom:3rem;
 }
 
 /* Header */
@@ -76,10 +81,10 @@ CUSTOM_CSS = """
   background:var(--nhs-blue-dark); border-color:var(--nhs-blue-dark); color:#fff; }
 .stButton > button[kind="primary"]:active{ transform:translateY(1px); }
 
-/* Example chips */
+/* Secondary buttons (chips, remove, unlock) */
 .stButton > button[kind="secondary"]{
   background:var(--card); color:var(--nhs-blue-dark); border:1px solid #d3e1f2;
-  border-radius:10px; font-weight:500; font-size:.85rem; padding:.55rem .7rem;
+  border-radius:10px; font-weight:500; font-size:.85rem; padding:.5rem .7rem;
   transition:background .12s ease, border-color .12s ease; }
 .stButton > button[kind="secondary"]:hover{
   background:var(--nhs-tint); border-color:var(--nhs-blue); color:var(--nhs-blue-dark); }
@@ -113,12 +118,24 @@ CUSTOM_CSS = """
 .info-title svg{ color:var(--nhs-blue); flex:0 0 auto; }
 .info-desc{ color:var(--muted); font-size:.83rem; margin:.3rem 0 0; line-height:1.45; }
 
-/* Source expanders */
-[data-testid="stExpander"]{ border:1px solid var(--line); border-radius:10px;
-  background:var(--card); margin-bottom:.45rem; }
-[data-testid="stExpander"] summary{ font-weight:500; color:var(--nhs-blue-dark);
-  font-size:.88rem; }
-[data-testid="stExpander"] summary:hover{ color:var(--nhs-blue); }
+/* Source cards */
+.src-card{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+  padding:.7rem .85rem; margin-bottom:.55rem; }
+.src-head{ display:flex; align-items:baseline; gap:.4rem; flex-wrap:wrap; }
+.src-idx{ font-weight:700; color:var(--nhs-blue); font-size:.85rem; }
+.src-title{ font-weight:600; color:var(--ink); font-size:.85rem; line-height:1.3;
+  flex:1 1 auto; min-width:0; }
+.src-page{ color:var(--muted); font-size:.76rem; font-weight:500; white-space:nowrap; }
+.src-snip{ color:var(--muted); font-size:.79rem; line-height:1.45; margin-top:.4rem;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+
+/* File uploader */
+[data-testid="stFileUploaderDropzone"]{
+  border:1px dashed #cdd6df; border-radius:10px; background:var(--bg); }
+
+/* Admin unlock note */
+.admin-cta{ color:var(--muted); font-size:.8rem; margin:.2rem 0 .4rem; font-weight:600;
+  text-transform:uppercase; letter-spacing:.08em; }
 
 /* Footer */
 .app-footer{ margin-top:2.6rem; padding-top:1rem; border-top:1px solid var(--line);
@@ -172,6 +189,8 @@ def pretty_name(filename):
 
 st.session_state.setdefault("query", "")
 st.session_state.setdefault("submitted", False)
+st.session_state.setdefault("is_admin", False)
+st.session_state.setdefault("uploader_round", 0)
 
 
 def submit_example(text):
@@ -191,7 +210,7 @@ st.markdown(
 # Three fixed page columns
 kb_col, main_col, side_col = st.columns([1, 4, 1.3], gap="large")
 
-# Left: knowledge base panel
+# ---------- Left: knowledge base + admin unlock ----------
 with kb_col:
     try:
         sources = list_sources()
@@ -200,7 +219,7 @@ with kb_col:
     items = "".join(
         f'<div class="kb-item">{DOC_SVG}<span>{pretty_name(s)}</span></div>'
         for s in sources
-    ) if sources else '<div class="kb-note">No guidelines indexed yet. Run python ingest.py first.</div>'
+    ) if sources else '<div class="kb-note">No guidelines indexed yet.</div>'
     st.markdown(
         f'<div class="kb-panel">'
         f'<div class="kb-head"><span class="kb-title">Knowledge base</span>'
@@ -210,8 +229,83 @@ with kb_col:
         unsafe_allow_html=True,
     )
 
-# Centre: question
+    st.markdown("<div style='height:.9rem'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="admin-cta">Administration</div>', unsafe_allow_html=True)
+    if not st.session_state.is_admin:
+        code = st.text_input("Admin access code", type="password",
+                             key="admin_code", label_visibility="collapsed",
+                             placeholder="Admin access code")
+        if st.button("Unlock", key="unlock_btn", type="secondary"):
+            if ADMIN_PASSWORD and code == ADMIN_PASSWORD:
+                st.session_state.is_admin = True
+                st.rerun()
+            elif not ADMIN_PASSWORD:
+                st.caption("No admin code is set. Add ADMIN_PASSWORD to your .env file.")
+            else:
+                st.caption("Incorrect code.")
+    else:
+        st.caption("Admin mode active.")
+        if st.button("Exit admin", key="lock_btn", type="secondary"):
+            st.session_state.is_admin = False
+            st.rerun()
+
+# ---------- Centre: admin panel (if unlocked) + question ----------
 with main_col:
+    if st.session_state.is_admin:
+        with st.container(border=True):
+            st.markdown('<div class="section-label">Manage knowledge base · admin</div>',
+                        unsafe_allow_html=True)
+            admin_name = st.text_input(
+                "Your name (recorded against changes)",
+                key="admin_name", placeholder="e.g. Dr A. Smith",
+            )
+            uploaded = st.file_uploader(
+                "Add local trust guideline(s) — PDF",
+                type=["pdf"], accept_multiple_files=True,
+                key=f"uploader_{st.session_state.uploader_round}",
+            )
+            if st.button("Add to knowledge base", type="primary", key="add_btn"):
+                if uploaded:
+                    who = admin_name.strip() or "admin"
+                    for f in uploaded:
+                        with st.spinner(f"Indexing {f.name}..."):
+                            n = add_guideline(f.getvalue(), f.name, added_by=who)
+                        if n:
+                            st.success(f"Added {f.name} ({n} chunks).")
+                        else:
+                            st.warning(f"{f.name}: no readable text (scanned PDF?). Skipped.")
+                    st.session_state.uploader_round += 1
+                    st.rerun()
+                else:
+                    st.warning("Choose at least one PDF first.")
+
+            meta = get_source_meta()
+            current = list_sources()
+            if current:
+                st.markdown('<div class="chips-label">Currently indexed</div>',
+                            unsafe_allow_html=True)
+                for s in current:
+                    info = meta.get(s, {})
+                    added_by = info.get("added_by", "—")
+                    added_at = info.get("added_at")
+                    when = ""
+                    if added_at:
+                        try:
+                            when = datetime.fromisoformat(added_at).strftime("%d %b %Y, %H:%M")
+                        except ValueError:
+                            when = added_at
+                    sub = f"Added by {added_by}" + (f" · {when}" if when else "")
+                    c1, c2 = st.columns([4, 1])
+                    c1.markdown(
+                        f"**{pretty_name(s)}**  \n"
+                        f"<span style='color:#5b6b7b;font-size:.8rem'>{sub}</span>",
+                        unsafe_allow_html=True,
+                    )
+                    if c2.button("Remove", key=f"rm_{s}", type="secondary"):
+                        delete_guideline(s)
+                        st.rerun()
+        st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
+
     st.text_input(
         "Ask a clinical question",
         key="query",
@@ -242,8 +336,8 @@ with main_col:
     if err:
         st.error(
             f"Something went wrong: {err}\n\n"
-            "Checklist: have you run `python ingest.py`, added PDFs to "
-            "guidelines/, and set ANTHROPIC_API_KEY in your .env file?"
+            "Checklist: have you set ANTHROPIC_API_KEY in your .env file and "
+            "added at least one guideline to the knowledge base?"
         )
     elif response:
         st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
@@ -251,13 +345,23 @@ with main_col:
             st.markdown('<div class="section-label">Answer</div>', unsafe_allow_html=True)
             st.markdown(response)
 
-# Right: context panel
+# ---------- Right: sources / how it works ----------
 with side_col:
     if response and passages:
         st.markdown('<div class="section-label">Sources</div>', unsafe_allow_html=True)
+        cards = []
         for i, (doc, meta) in enumerate(passages, start=1):
-            with st.expander(f"[{i}]  {pretty_name(meta['source'])} - page {meta['page']}"):
-                st.write(doc)
+            title = html.escape(pretty_name(meta["source"]))
+            page = html.escape(str(meta["page"]))
+            snippet = html.escape(" ".join(doc.split())[:300])
+            cards.append(
+                f'<div class="src-card">'
+                f'<div class="src-head"><span class="src-idx">[{i}]</span>'
+                f'<span class="src-title">{title}</span>'
+                f'<span class="src-page">p.{page}</span></div>'
+                f'<div class="src-snip">{snippet}</div></div>'
+            )
+        st.markdown("".join(cards), unsafe_allow_html=True)
     elif not err:
         st.markdown('<div class="section-label">How it works</div>', unsafe_allow_html=True)
         for svg, title, desc in HOW_IT_WORKS:
